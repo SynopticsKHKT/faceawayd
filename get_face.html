@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Face Detector</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        .container {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f3f4f6;
+        }
+        .card {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            max-width: 90%;
+            width: 500px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+<div class="card space-y-6">
+    <h1 class="text-3xl font-bold text-gray-800 text-center">Temporary WIP Face Detector</h1>
+    <p class="text-gray-600 text-center">Capture a frame from your webcam to detect faces.</p>
+
+    <!-- Video and Canvas for capturing frame -->
+    <div class="relative w-full aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center">
+        <video id="video" class="w-full h-full object-cover" autoplay></video>
+        <canvas id="canvas" class="w-full h-full object-cover hidden"></canvas>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 justify-center">
+        <button id="startButton" class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white font-medium rounded-full hover:bg-blue-700 transition duration-300">
+            Start Webcam
+        </button>
+        <button id="captureButton" class="w-full sm:w-auto px-6 py-3 bg-green-600 text-white font-medium rounded-full hover:bg-green-700 transition duration-300" disabled>
+            Capture Image
+        </button>
+    </div>
+
+    <div id="statusMessage" class="text-center text-gray-500 mt-4 h-6"></div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const startButton = document.getElementById('startButton');
+    const captureButton = document.getElementById('captureButton');
+    const statusMessage = document.getElementById('statusMessage');
+
+    const context = canvas.getContext('2d');
+    let stream = null;
+
+    // Start webcam stream
+    startButton.addEventListener('click', async () => {
+        statusMessage.textContent = 'Starting webcam...';
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            video.srcObject = stream;
+            video.style.display = 'block';
+            canvas.style.display = 'none';
+            startButton.disabled = true;
+            captureButton.disabled = false;
+            statusMessage.textContent = 'Webcam active. Click "Capture Image" to take a photo.';
+        } catch (err) {
+            console.error("Error accessing the webcam: ", err);
+            statusMessage.textContent = 'Error: Could not access webcam. Please check permissions.';
+        }
+    });
+
+    // Capture image from video stream and post to server
+    captureButton.addEventListener('click', async () => {
+        if (!stream) {
+            statusMessage.textContent = 'Please start the webcam first.';
+            return;
+        }
+
+        // Set canvas dimensions to match video frame
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        
+        // Draw the current video frame onto the canvas
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        video.style.display = 'none';
+        canvas.style.display = 'block';
+
+        statusMessage.textContent = 'Processing image...';
+        captureButton.disabled = true;
+
+        // Convert canvas content to a blob (e.g., JPEG)
+        canvas.toBlob(async (blob) => {
+            if (!blob) {
+                statusMessage.textContent = 'Failed to capture image.';
+                captureButton.disabled = false;
+                return;
+            }
+            
+            try {
+                // Post the image data to the server API
+                const response = await fetch('/api/get_face', {
+                    method: 'POST',
+                    body: blob,
+                    headers: {
+                        'Content-Type': 'image/jpeg'
+                    }
+                });
+
+                if (!response.ok) {
+                  throw new Error(`HTTP error! status: ${response.status} with response ${response.body}`);
+                }
+
+                // Get the blob response from the server
+                const imageBlob = await response.blob();
+                
+                // Create a temporary link to trigger the download
+                const downloadUrl = window.URL.createObjectURL(imageBlob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = downloadUrl;
+                a.download = 'detected_face.jpg';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                a.remove();
+
+                statusMessage.textContent = 'Image downloaded successfully!';
+            } catch (error) {
+                console.error("Error posting image to server: ", error);
+                statusMessage.textContent = `Error: ${error.message}`;
+            } finally {
+                captureButton.disabled = false;
+            }
+        }, 'image/jpeg', 0.95);
+    });
+</script>
+
+</body>
+</html>
+
