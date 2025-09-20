@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-900 text-white">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera WebSocket Streamer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .status-dot {
+            height: 10px;
+            width: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col items-center justify-center p-4 bg-gray-900">
+
+    <div class="w-full max-w-2xl mx-auto bg-gray-800 rounded-2xl shadow-2xl overflow-hidden">
+        <div class="p-6 border-b border-gray-700">
+            <h1 class="text-2xl font-bold text-center text-gray-100">Camera Streamer</h1>
+            <p class="text-sm text-center text-gray-400 mt-1">Live video from your camera is being sent to the WebSocket server.</p>
+        </div>
+
+        <!-- Video and Status Display -->
+        <div class="relative bg-black">
+            <video id="video" autoplay muted playsinline class="w-full h-auto transform scale-x-[-1]"></video>
+            <div id="status-overlay" class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70 transition-opacity duration-500">
+                <div class="text-center">
+                    <div id="status-icon-container" class="mb-4">
+                        <!-- SVG spinner -->
+                        <svg class="animate-spin h-10 w-10 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </div>
+                    <p id="status" class="text-lg font-medium text-gray-200">Starting Camera...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Info Footer -->
+        <div class="p-4 bg-gray-800/50 border-t border-gray-700 flex items-center justify-between text-sm">
+             <div class="flex items-center">
+                <span id="connection-dot" class="status-dot bg-yellow-500 mr-2"></span>
+                <span id="connection-status" class="font-medium text-gray-300">CONNECTING</span>
+            </div>
+            <p id="fps" class="text-gray-400">FPS: 0</p>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for frame grabbing -->
+    <canvas id="canvas" class="hidden"></canvas>
+
+    <script>
+        // --- DOM Elements ---
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const statusDisplay = document.getElementById('status');
+        const statusOverlay = document.getElementById('status-overlay');
+        const connectionStatus = document.getElementById('connection-status');
+        const connectionDot = document.getElementById('connection-dot');
+        const fpsDisplay = document.getElementById('fps');
+        const context = canvas.getContext('2d');
+
+        // --- Configuration ---
+        const FPS = 10; // Frames per second to send
+        const WEBSOCKET_URL = `wss://${window.location.host}/ws/camera`; // Use wss for secure connection
+
+        let websocket;
+        let streamingInterval;
+        let framesSentLastSecond = 0;
+        let fpsTrackerInterval;
+
+        // --- Main Function ---
+        async function main() {
+            try {
+                // 1. Get camera access
+                statusDisplay.textContent = 'Requesting camera access...';
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: false
+                });
+
+                // 2. Display camera feed in video element
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    statusOverlay.classList.add('opacity-0', 'pointer-events-none'); // Hide overlay
+                    
+                    // 3. Connect to WebSocket and start streaming
+                    connectWebSocket();
+                };
+
+            } catch (err) {
+                console.error("Error accessing camera: ", err);
+                statusDisplay.textContent = `Error: ${err.name}. Please grant camera permissions.`;
+                updateConnectionStatus('ERROR', 'bg-red-500');
+            }
+        }
+
+        // --- WebSocket Handling ---
+        function connectWebSocket() {
+            statusDisplay.textContent = 'Connecting to server...';
+            updateConnectionStatus('CONNECTING', 'bg-yellow-500');
+            
+            websocket = new WebSocket(WEBSOCKET_URL);
+
+            websocket.onopen = () => {
+                console.log('WebSocket connection established.');
+                updateConnectionStatus('CONNECTED', 'bg-green-500');
+                startStreaming();
+            };
+
+            websocket.onclose = () => {
+                console.log('WebSocket connection closed.');
+                updateConnectionStatus('DISCONNECTED', 'bg-red-500');
+                stopStreaming();
+            };
+
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus('ERROR', 'bg-red-500');
+                stopStreaming();
+            };
+        }
+
+        // --- Streaming Logic ---
+        function startStreaming() {
+            console.log('Starting video stream...');
+            if (streamingInterval) clearInterval(streamingInterval);
+            if (fpsTrackerInterval) clearInterval(fpsTrackerInterval);
+
+            // Start sending frames
+            streamingInterval = setInterval(() => {
+                if (websocket.readyState === WebSocket.OPEN) {
+                    // Draw video frame to canvas
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    // Get canvas image as a Blob (raw bytes) and send
+                    canvas.toBlob((blob) => {
+                        // Ensure the blob was created and connection is still open
+                        if (blob && websocket.readyState === WebSocket.OPEN) {
+                            websocket.send(blob);
+                            framesSentLastSecond++;
+                        }
+                    }, 'image/jpeg', 0.7); // Quality = 70%
+                }
+            }, 1000 / FPS);
+
+            // Start FPS counter
+            fpsTrackerInterval = setInterval(() => {
+                fpsDisplay.textContent = `FPS: ${framesSentLastSecond}`;
+                framesSentLastSecond = 0;
+            }, 1000);
+        }
+
+        function stopStreaming() {
+            console.log('Stopping video stream.');
+            clearInterval(streamingInterval);
+            clearInterval(fpsTrackerInterval);
+            fpsDisplay.textContent = 'FPS: 0';
+        }
+
+        // --- UI Updates ---
+        function updateConnectionStatus(statusText, dotClass) {
+            connectionStatus.textContent = statusText;
+            connectionDot.className = `status-dot mr-2 ${dotClass}`;
+        }
+        
+        // --- Entry Point ---
+        main();
+    </script>
+</body>
+</html>
+
+

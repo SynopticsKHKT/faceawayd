@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Receive Processed Video</title>
+  <style>
+    body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    video { width: 80%; border: 2px solid white; background: black; }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+
+  <script>
+    async function start() {
+      const pc = new RTCPeerConnection();
+
+      // attach incoming stream to video element
+      const videoEl = document.getElementById("video");
+      pc.ontrack = (event) => {
+        console.log("Track received:", event.streams);
+        videoEl.srcObject = event.streams[0];
+      };
+
+      // we explicitly want to RECEIVE video only
+      pc.addTransceiver("video", { direction: "recvonly" });
+
+      // create offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // send to server
+      const resp = await fetch("/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sdp: pc.localDescription.sdp,
+          type: pc.localDescription.type,
+        }),
+      });
+
+      const answer = await resp.json();
+      await pc.setRemoteDescription(answer);
+    }
+
+    start().catch(console.error);
+  </script>
+</body>
+</html>
+
