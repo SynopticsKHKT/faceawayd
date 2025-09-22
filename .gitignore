@@ -2,3 +2,4 @@
 cert.*
 faces/*
 *.pt
+__pycache__
