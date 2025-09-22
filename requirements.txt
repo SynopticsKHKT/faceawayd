@@ -1,4 +1,5 @@
 aiohttp
+aiortc[h264]
 opencv-python
 face-recognition
 ultralytics

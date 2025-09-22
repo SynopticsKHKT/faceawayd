@@ -32,7 +32,9 @@
       // send to server
       const resp = await fetch("/offer", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json",
+          "Authorization": "Bearer " + (await (await fetch("/get_cam_token")).json())
+        },
         body: JSON.stringify({
           sdp: pc.localDescription.sdp,
           type: pc.localDescription.type,

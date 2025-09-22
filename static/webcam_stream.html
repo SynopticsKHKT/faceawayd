@@ -31,13 +31,11 @@
             <p class="text-sm text-center text-gray-400 mt-1">Live video from your camera is being sent to the WebSocket server.</p>
         </div>
 
-        <!-- Video and Status Display -->
         <div class="relative bg-black">
             <video id="video" autoplay muted playsinline class="w-full h-auto transform scale-x-[-1]"></video>
             <div id="status-overlay" class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70 transition-opacity duration-500">
                 <div class="text-center">
                     <div id="status-icon-container" class="mb-4">
-                        <!-- SVG spinner -->
                         <svg class="animate-spin h-10 w-10 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -48,17 +46,15 @@
             </div>
         </div>
 
-        <!-- Connection Info Footer -->
         <div class="p-4 bg-gray-800/50 border-t border-gray-700 flex items-center justify-between text-sm">
              <div class="flex items-center">
-                <span id="connection-dot" class="status-dot bg-yellow-500 mr-2"></span>
-                <span id="connection-status" class="font-medium text-gray-300">CONNECTING</span>
-            </div>
-            <p id="fps" class="text-gray-400">FPS: 0</p>
+                 <span id="connection-dot" class="status-dot bg-yellow-500 mr-2"></span>
+                 <span id="connection-status" class="font-medium text-gray-300">CONNECTING</span>
+             </div>
+             <p id="fps" class="text-gray-400">FPS: 0</p>
         </div>
     </div>
 
-    <!-- Hidden canvas for frame grabbing -->
     <canvas id="canvas" class="hidden"></canvas>
 
     <script>
@@ -74,12 +70,16 @@
 
         // --- Configuration ---
         const FPS = 10; // Frames per second to send
-        const WEBSOCKET_URL = `wss://${window.location.host}/ws/camera`; // Use wss for secure connection
+        const WEBSOCKET_URL = `wss://${window.location.host}/ws/camera`;
+        const RECONNECT_DELAY_MS = 3000; // Delay before trying to reconnect (in milliseconds)
+        const IMAGE_FORMAT = 'image/webp'; // Use 'image/webp' for better compression than 'image/jpeg'
+        const IMAGE_QUALITY = 0.7; // Image quality for the compression (0.0 to 1.0)
 
         let websocket;
         let streamingInterval;
-        let framesSentLastSecond = 0;
         let fpsTrackerInterval;
+        let framesSentLastSecond = 0;
+        let reconnectTimeout;
 
         // --- Main Function ---
         async function main() {
@@ -87,7 +87,10 @@
                 // 1. Get camera access
                 statusDisplay.textContent = 'Requesting camera access...';
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: 640, height: 480 },
+                    video: {
+                        width: { ideal: 1280 }, // Request a more common resolution
+                        height: { ideal: 720 }
+                    },
                     audio: false
                 });
 
@@ -99,7 +102,7 @@
                     statusOverlay.classList.add('opacity-0', 'pointer-events-none'); // Hide overlay
                     
                     // 3. Connect to WebSocket and start streaming
-                    connectWebSocket();
+                    connect();
                 };
 
             } catch (err) {
@@ -110,10 +113,15 @@
         }
 
         // --- WebSocket Handling ---
-        function connectWebSocket() {
-            statusDisplay.textContent = 'Connecting to server...';
+        function connect() {
+            // Clear any pending reconnection timer to avoid multiple connection attempts
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+
             updateConnectionStatus('CONNECTING', 'bg-yellow-500');
+            console.log(`Attempting to connect to ${WEBSOCKET_URL}...`);
             
+            // Note: The WebSocket protocol supports the 'permessage-deflate' extension for transparent, lossless compression.
+            // This is negotiated automatically if the server supports it and can further reduce data usage.
             websocket = new WebSocket(WEBSOCKET_URL);
 
             websocket.onopen = () => {
@@ -122,16 +130,22 @@
                 startStreaming();
             };
 
-            websocket.onclose = () => {
-                console.log('WebSocket connection closed.');
+            websocket.onclose = (event) => {
+                console.log(`WebSocket connection closed. Code: ${event.code}.`);
+                stopStreaming(); // Clean up intervals
                 updateConnectionStatus('DISCONNECTED', 'bg-red-500');
-                stopStreaming();
+                
+                // Schedule a reconnection attempt
+                console.log(`Will attempt to reconnect in ${RECONNECT_DELAY_MS / 1000} seconds.`);
+                reconnectTimeout = setTimeout(connect, RECONNECT_DELAY_MS);
             };
 
             websocket.onerror = (error) => {
                 console.error('WebSocket error:', error);
+                // The 'onclose' event will usually fire immediately after 'onerror',
+                // so the reconnection logic is handled there. We ensure the socket is closed.
                 updateConnectionStatus('ERROR', 'bg-red-500');
-                stopStreaming();
+                websocket.close();
             };
         }
 
@@ -143,18 +157,18 @@
 
             // Start sending frames
             streamingInterval = setInterval(() => {
-                if (websocket.readyState === WebSocket.OPEN) {
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
                     // Draw video frame to canvas
                     context.drawImage(video, 0, 0, canvas.width, canvas.height);
                     
-                    // Get canvas image as a Blob (raw bytes) and send
+                    // Get canvas image as a Blob and send it
                     canvas.toBlob((blob) => {
                         // Ensure the blob was created and connection is still open
                         if (blob && websocket.readyState === WebSocket.OPEN) {
                             websocket.send(blob);
                             framesSentLastSecond++;
                         }
-                    }, 'image/jpeg', 0.7); // Quality = 70%
+                    }, IMAGE_FORMAT, IMAGE_QUALITY);
                 }
             }, 1000 / FPS);
 
@@ -183,5 +197,3 @@
     </script>
 </body>
 </html>
-
-

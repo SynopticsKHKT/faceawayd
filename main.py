@@ -1,44 +1,27 @@
 from aiohttp import web
 from av import VideoFrame
 import io
+import time
+from cv2.gapi import video
 import numpy as np
+import string
 import torch
 import os
 import cv2
 import ssl
-from aiortc import VideoStreamTrack, RTCPeerConnection, RTCSessionDescription
+import random
+import concurrent.futures
+from aiortc import (
+    RTCRtpSender,
+    VideoStreamTrack,
+    RTCPeerConnection,
+    RTCSessionDescription,
+)
 
-from ultralytics import YOLO
 import asyncio
-import face_recognition
+import mlopts
 
 q = asyncio.Queue
-
-print(">>> Checking for GPUs...")
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print("Running on device: {}".format(device))
-
-print(">>> Preparing Machine Learning models...")
-model = YOLO("yolo11n.pt")
-
-known_face_encodings = []
-known_face_names = ["khoa", "khoa2", "khoa3"]
-face_caches = {}
-
-for name in known_face_names:
-    pathtoimg = "./faces/" + name + ".jpg"
-    if not os.path.exists(pathtoimg):
-        pathtoimg = "./faces/" + name + ".png"
-        if not os.path.exists(pathtoimg):
-            continue
-
-    image = face_recognition.load_image_file(pathtoimg)
-    face_encodings = face_recognition.face_encodings(image)
-
-    if face_encodings:
-        # append encoding to known faces
-        known_face_encodings.append(face_encodings[0])
-        print("> Loaded face for", name)
 
 
 routes = web.RouteTableDef()
@@ -69,10 +52,34 @@ class ProcessedTrack(VideoStreamTrack):
 
 
 pcs = set()
+auth_toks = set()
+
+
+@routes.get("/get_cam_token")
+async def get_camera_token(_: web.Request):
+    tok = "".join(
+        random.choice(string.ascii_letters + string.digits) for _ in range(24)
+    )
+    auth_toks.add(tok)
+    return web.json_response(tok)
 
 
 @routes.post("/offer")
-async def offer(request):
+async def offer(request: web.Request):
+    # Bearer [AuthKey]
+    auth = request.headers.get("Authorization")
+    print(request.headers)
+    if auth is None:
+        return web.json_response(
+            {"message": "No authentication headers provided."}, status=401
+        )
+    try:
+        auth_toks.remove(auth.split(" ")[1])
+    except:
+        return web.json_response(
+            {"message": "Invalid authentication token."}, status=401
+        )
+
     params = await request.json()
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
 
@@ -90,12 +97,33 @@ async def offer(request):
             pcs.discard(pc)
 
     await pc.setRemoteDescription(offer)
+
+    video_trans = next((t for t in pc.getTransceivers() if t.kind == "video"), None)
+    if video_trans:
+        all_codecs = RTCRtpSender.getCapabilities("video").codecs
+        print("Available codecs: ")
+        print(all_codecs)
+
+        # Create a list of preferred codecs, with H.264 first, then VP9
+        preferred_codecs = []
+        for codec in all_codecs:
+            if codec.mimeType.lower() == "video/h264":
+                preferred_codecs.insert(0, codec)  # Add H.264 to the front
+            elif codec.mimeType.lower() == "video/vp9":
+                preferred_codecs.append(codec)  # Add VP9 after H.264
+
+        if preferred_codecs:
+            print("Setting preferred codecs: ", preferred_codecs)
+            video_trans.setCodecPreferences(preferred_codecs)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
     return web.json_response(
         {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
     )
+
+
+executor = concurrent.futures.ThreadPoolExecutor()
 
 
 @routes.get("/ws/camera")
@@ -106,74 +134,22 @@ async def recv_images(r):
     print("ws connected: ", r.remote)
 
     global latest_frame
+    loop = asyncio.get_running_loop()
     async for msg in ws:
         if msg.type == web.WSMsgType.BINARY:
+            start_time = time.perf_counter()
             img_bytes = io.BytesIO(msg.data)
             np_array = np.frombuffer(img_bytes.getvalue(), np.uint8)
             frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
             if frame is None:
                 continue  # Receive next frame
 
-            # Run YOLO11 tracking on the frame, persisting tracks between frames
-            results = model.track(
-                frame, persist=True, classes=[0], tracker="botsort.yaml"
-            )
-
-            if results[0].boxes.id is not None:
-                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-                track_ids = results[0].boxes.id.cpu().numpy().astype(int)
-
-                for box, track_id in zip(boxes, track_ids):
-                    identity = "Unknown"
-                    x1, y1, x2, y2 = box
-                    if track_id in face_caches:
-                        identity = face_caches[track_id]
-                    else:
-                        person_crop = frame[y1:y2, x1:x2]
-
-                        # prevent stupid
-                        if person_crop.size > 0:
-                            rgb_crop = cv2.cvtColor(person_crop, cv2.COLOR_BGR2RGB)
-                            face_locations = face_recognition.face_locations(rgb_crop)
-                            face_encodings = face_recognition.face_encodings(
-                                rgb_crop, face_locations
-                            )
-
-                            if face_encodings:
-                                # only match 1st
-                                face_encoding = face_encodings[0]
-
-                                matches = face_recognition.compare_faces(
-                                    known_face_encodings, face_encoding, tolerance=0.9
-                                )
-                                print("Match?> ", matches)
-                                # sleep(10000)
-                                if True in matches:
-                                    first_match_index = matches.index(True)
-                                    identity = known_face_names[first_match_index]
-                                    face_caches[track_id] = identity
-
-                    identity = face_caches.get(track_id, "Unknown")
-                    label = f"{identity} (id: {track_id})"
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-                    cv2.rectangle(
-                        frame, (x1, y1 - h - 15), (x1 + w, y1 - 10), (0, 255, 0), -1
-                    )
-
-                    cv2.putText(
-                        frame,
-                        label,
-                        (x1, y1 - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (255, 255, 255),
-                        2,
-                    )
-
+            # loop.run_in_executor(executor, mlopts.process_cam_frame, frame)
             async with frame_lock:
-                print("$ Updating frame...")
                 latest_frame = frame
+            duration = time.perf_counter() - start_time
+            print(f"Processing operation took {duration:.4f} seconds.")
+
     return ws
 
 
