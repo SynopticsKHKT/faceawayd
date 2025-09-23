@@ -1,4 +1,5 @@
 import numpy as np
+import time
 import string
 import torch
 import os
@@ -35,6 +36,8 @@ for name in known_face_names:
 
 
 def process_cam_frame(frame):
+    print("Processing frame with AI...")
+    start_time = time.perf_counter()
     # Run YOLO11 tracking on the frame, persisting tracks between frames
     results = model.track(frame, persist=True, classes=[0], tracker="botsort.yaml")
 
@@ -87,4 +90,6 @@ def process_cam_frame(frame):
                 (255, 255, 255),
                 2,
             )
-    return frame
+    duration = time.perf_counter() - start_time
+    print(f"Processing AI frame operation took {duration:.4f} seconds.")
+    # cv2.imshow("Test", frame)

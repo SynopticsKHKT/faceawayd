@@ -135,6 +135,7 @@ async def recv_images(r):
 
     global latest_frame
     loop = asyncio.get_running_loop()
+    i = 0
     async for msg in ws:
         if msg.type == web.WSMsgType.BINARY:
             start_time = time.perf_counter()
@@ -144,9 +145,17 @@ async def recv_images(r):
             if frame is None:
                 continue  # Receive next frame
 
-            # loop.run_in_executor(executor, mlopts.process_cam_frame, frame)
             async with frame_lock:
                 latest_frame = frame
+
+            print(i)
+            if i < 6:
+                i += 1
+            else:
+                print("Running in executor")
+                loop.run_in_executor(executor, mlopts.process_cam_frame, frame)
+                i = 0
+
             duration = time.perf_counter() - start_time
             print(f"Processing operation took {duration:.4f} seconds.")
 
