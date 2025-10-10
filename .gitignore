@@ -3,3 +3,4 @@ cert.*
 faces/*
 *.pt
 __pycache__/
+training-data/

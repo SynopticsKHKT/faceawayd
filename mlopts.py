@@ -4,6 +4,7 @@ import string
 import torch
 import os
 import cv2
+import mlutils
 import face_recognition
 from ultralytics import YOLO
 
@@ -14,8 +15,10 @@ print("Running on device: {}".format(device))
 
 print(">>> Preparing Machine Learning models...")
 model = YOLO("yolo11n.pt")
+door_model = YOLO("doors.pt")
 
 known_face_encodings = []
+door_boxes = []
 known_face_names = ["khoa", "khoa2", "khoa3"]
 face_caches = {}
 
@@ -93,3 +96,12 @@ def process_cam_frame(frame):
     duration = time.perf_counter() - start_time
     print(f"Processing AI frame operation took {duration:.4f} seconds.")
     # cv2.imshow("Test", frame)
+
+
+def process_door_frame(frame):
+    # process the cur door frame to return boxes of doors
+    results = door_model.track(frame)
+    cv2.imshow("oputput", results[0].plot())
+
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        return False

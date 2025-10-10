@@ -136,7 +136,20 @@ async def recv_images(r):
     global latest_frame
     loop = asyncio.get_running_loop()
     i = 0
+
+    flag = True
+
     async for msg in ws:
+        if flag:
+            if msg.type != web.WSMsgType.BINARY:
+                continue
+            img_bytes = io.BytesIO(msg.data)
+            np_array = np.frombuffer(img_bytes.getvalue(), np.uint8)
+            frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+            # process camera for doors
+            mlopts.process_door_frame(frame)
+            flag = False
+            continue
         if msg.type == web.WSMsgType.BINARY:
             start_time = time.perf_counter()
             img_bytes = io.BytesIO(msg.data)
