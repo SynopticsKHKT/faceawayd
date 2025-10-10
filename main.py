@@ -189,9 +189,13 @@ async def recver_http(_: web.Request):
 app = web.Application()
 app.add_routes(routes)
 
+CONFIG_SSL = False
 if __name__ == "__main__":
     print("Server running at http://localhost:13577")
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.load_cert_chain("cert.crt", "cert.key")
+    if CONFIG_SSL:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain("cert.crt", "cert.key")
 
-    web.run_app(app, host="0.0.0.0", port=13577, ssl_context=ssl_context)
+        web.run_app(app, host="0.0.0.0", port=13577, ssl_context=ssl_context)
+    else:
+        web.run_app(app, host="0.0.0.0", port=13577)

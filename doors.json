@@ -1,0 +1,6 @@
+{
+  "doors": [
+    { "room": "phong_khach", "box": [1000, 1022, 49, 42] },
+    { "room": "phong_ngu", "box": [200, 300, 400, 500] }
+  ]
+}
